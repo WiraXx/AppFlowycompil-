@@ -1,0 +1,119 @@
+name: Desktop Build (Windows & Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to build"
+        required: true
+        default: "main"
+
+env:
+  FLUTTER_VERSION: "3.27.4"
+  RUST_TOOLCHAIN: "1.85.0"
+  BUILD_VERSION: "0.1.0-local"
+
+jobs:
+  build-for-windows:
+    name: Windows x86_64
+    runs-on: windows-2019
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          target: x86_64-pc-windows-msvc
+          override: true
+          components: rustfmt
+          profile: minimal
+
+      - name: Install prerequisites
+        working-directory: frontend
+        run: |
+          vcpkg integrate install
+          cargo install --force --locked cargo-make
+          cargo install --force --locked duckscript_cli
+
+      - name: Build Windows app
+        working-directory: frontend
+        run: |
+          flutter config --enable-windows-desktop
+          dart ./scripts/flutter_release_build/build_flowy.dart exclude-directives . ${{ env.BUILD_VERSION }}
+          cargo make --env APP_VERSION=${{ env.BUILD_VERSION }} --profile production-windows-x86 appflowy
+          dart ./scripts/flutter_release_build/build_flowy.dart include-directives . ${{ env.BUILD_VERSION }}
+
+      - name: Archive Asset
+        uses: vimtor/action-zip@v1
+        with:
+          files: frontend\appflowy_flutter\product\${{ env.BUILD_VERSION }}\windows\
+          dest: frontend\appflowy_flutter\product\${{ env.BUILD_VERSION }}\windows\AppFlowy-${{ env.BUILD_VERSION }}-windows-x86_64.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appflowy-windows-x86_64
+          path: frontend\appflowy_flutter\product\${{ env.BUILD_VERSION }}\windows\AppFlowy-${{ env.BUILD_VERSION }}-windows-x86_64.zip
+
+  build-for-linux:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+    env:
+      LINUX_APP_RELEASE_PATH: frontend/appflowy_flutter/product/0.1.0-local/linux/Release
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Install flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          target: x86_64-unknown-linux-gnu
+          override: true
+          components: rustfmt
+          profile: minimal
+
+      - name: Install prerequisites
+        working-directory: frontend
+        run: |
+          sudo wget -qO /etc/apt/trusted.gpg.d/dart_linux_signing_key.asc https://dl-ssl.google.com/linux/linux_signing_key.pub
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsqlite3-dev libssl-dev clang cmake ninja-build pkg-config libgtk-3-dev libcurl4-openssl-dev
+          sudo apt-get install -y keybinder-3.0 libnotify-dev libfuse2
+          cargo install --force --locked cargo-make
+          cargo install --force --locked duckscript_cli
+          rustup target add x86_64-unknown-linux-gnu
+
+      - name: Build AppFlowy
+        working-directory: frontend
+        run: |
+          flutter config --enable-linux-desktop
+          dart ./scripts/flutter_release_build/build_flowy.dart run . ${{ env.BUILD_VERSION }}
+
+      - name: Archive Asset
+        working-directory: ${{ env.LINUX_APP_RELEASE_PATH }}
+        run: tar -czf AppFlowy-${{ env.BUILD_VERSION }}-linux-x86_64.tar.gz *
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appflowy-linux-x86_64
+          path: ${{ env.LINUX_APP_RELEASE_PATH }}/AppFlowy-${{ env.BUILD_VERSION }}-linux-x86_64.tar.gz
